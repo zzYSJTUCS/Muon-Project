@@ -69,6 +69,9 @@ def train_base(model, opt, data, data_seed, scheduler, iterations, acc_steps, ba
     for _ in range(substep % num_substeps_per_epoch):
         get_batch(data_train_iter, device=extra_args.device)
 
+    if isinstance(opt, list):
+        adamw, muon = opt
+        adamw_scheduler, muon_scheduler = scheduler
     
     while itr < iterations:
             
@@ -94,12 +97,27 @@ def train_base(model, opt, data, data_seed, scheduler, iterations, acc_steps, ba
                 data_train_iter = iter(data["train"])
 
 
+
+
         if extra_args.grad_clip != 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), extra_args.grad_clip)
-        opt.step()
-        scheduler.step()
-        opt.zero_grad(set_to_none=True)
+
+        if isinstance(opt, list):
+            muon.step()
+            adamw.step()
+            muon_scheduler.step()
+            adamw_scheduler.step()
+            muon.zero_grad(set_to_none=True)
+            adamw.zero_grad(set_to_none=True)
+
+        else:
+            opt.step()
+            scheduler.step()
+            opt.zero_grad(set_to_none=True)
+
         itr += 1
+
+
 
         if itr % eval_freq == 0 or itr == iterations: # from here it's only evaluation code, all the training is above
             if distributed_backend.is_master_process():
@@ -109,8 +127,10 @@ def train_base(model, opt, data, data_seed, scheduler, iterations, acc_steps, ba
 
                 model.eval()
                 train_loss = loss.detach().cpu().item() * acc_steps
-                current_lr = scheduler.get_last_lr()[0] if scheduler is not None else extra_args.lr
-                
+                if isinstance(opt, list):
+                    current_lr = muon_scheduler.get_last_lr()[0] if scheduler is not None else extra_args.lr
+                else:
+                    current_lr = scheduler.get_last_lr()[0] if scheduler is not None else extra_args.lr
                 eval_steps = (
                     24 if itr < iterations else len(data["val"])
                 )

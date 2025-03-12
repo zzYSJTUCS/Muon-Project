@@ -38,12 +38,23 @@ def eval(model, data_val_iter, device='cpu', max_num_batches=24, ctx=nullcontext
 
 
 def save_checkpoint(distributed_backend, model, opt, scheduler, itr, ckpt_path, **extra_args):
+    if isinstance(opt, list):
+        muon, adamw = opt
+        muon_scheduler, adamw_scheduler = scheduler
+        opt_state_dict = [muon.state_dict(), adamw.state_dict()]
+        scheduler_state_dict = [muon_scheduler.state_dict(), adamw_scheduler.state_dict()]
+        checkpoint = dict({
+            'model': distributed_backend.get_raw_model(model).state_dict(),
+            'optimizer': opt_state_dict,
+            'scheduler': scheduler_state_dict,
+            'itr': itr,
+        }, **extra_args)
+    else:
+        checkpoint = dict({
+            'model': distributed_backend.get_raw_model(model).state_dict(),
+            'optimizer': opt.state_dict(),
+            'scheduler': scheduler.state_dict(),
+            'itr': itr,
+        }, **extra_args)
 
-    checkpoint = dict({
-        'model': distributed_backend.get_raw_model(model).state_dict(),
-        'optimizer': opt.state_dict(),
-        'scheduler': scheduler.state_dict(),
-        'itr': itr,
-    }, **extra_args)
-
-    torch.save(checkpoint, ckpt_path)
+        torch.save(checkpoint, ckpt_path)

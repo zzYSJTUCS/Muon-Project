@@ -10,20 +10,20 @@ def none_or_str(value):
 def parse_args(base_parser, args, namespace):
     parser = base_parser
     # General training params
-    parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--acc_steps', default=4, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--acc_steps', default=10, type=int)
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--data_seed', default=1337, type=int)
     parser.add_argument('--device', default='cuda:0', type=str)
-    parser.add_argument('--iterations', default=25000, type=int)
-    parser.add_argument('--lr', default=1e-3, type=float)
+    parser.add_argument('--iterations', default=2500, type=int)
+    parser.add_argument('--lr', default=5e-2, type=float)
     parser.add_argument('--warmup_percent', default=0.05, type=float)
     parser.add_argument('--weight_decay', default=0.1, type=float)
     parser.add_argument('--beta1', default=0.9, type=float)
     parser.add_argument('--beta2', default=0.95, type=float)
     parser.add_argument('--scheduler', default='cos', choices=['linear', 'cos', 'none'])
-    parser.add_argument('--opt', default='adamw', choices=['adamw', 'sgd'])
-    parser.add_argument('--eval_freq', default=200, type=int) # in iterations
+    parser.add_argument('--opt', default='adamw', choices=['adamw', 'sgd', 'Muon'])
+    parser.add_argument('--eval_freq', default=20, type=int) # in iterations
     parser.add_argument('--results_base_folder', default="./exps", type=str) 
     parser.add_argument('--grad_clip', default=0.0, type=float) # default value is 1.0 in NanoGPT
     # Dataset params

@@ -8,7 +8,7 @@ import copy
 import argparse
 import random
 import wandb
-
+from optim.muon import Muon
 import config
 from models.utils import get_model
 from data.utils import get_dataset
@@ -26,6 +26,19 @@ def get_args():
 
 
 def main(args): 
+        
+    if wandb.run is not None:
+        wandb.finish()  
+
+    if args.wandb:
+        wandb.init(
+            project=args.wandb_project,  
+            name=args.exp_name,  
+            config=args,  
+            reinit=True  
+        )
+
+
 
     torch.backends.cuda.matmul.allow_tf32 = True # allows us to make sure we're able to use tensorfloat32 during training
     torch.backends.cudnn.allow_tf32 = True
@@ -72,14 +85,60 @@ def main(args):
         extra_args = dict(fused=True) if use_fused else dict()
         opt = torch.optim.AdamW(group_specs, lr=args.lr, betas=(args.beta1, args.beta2),
                                 weight_decay=args.weight_decay, **extra_args)
+    elif args.opt == 'Muon':
+        # init the optimizer(s)
+        hidden_matrix_params = [
+            p for n, p in model.transformer.h.named_parameters() if p.ndim >= 2 and "embed" not in n
+        ]
+
+        # embed_params: Parameters related to embedding layers (wte and wpe)
+        embed_params = [
+            p for n, p in model.named_parameters() if "embed" in n
+        ]
+
+        # scalar_params: Parameters that are scalars (usually biases or layer normalization)
+        scalar_params = [
+            p for p in model.parameters() if p.ndim < 2
+        ]
+
+        # head_params: Parameters related to the final LM head (lm_head)
+        head_params = [model.lm_head.weight]
+        if hasattr(model.lm_head, 'bias') and model.lm_head.bias is not None:
+            head_params.append(model.lm_head.bias)
+        # Define learning rates for different parameter groups
+        adam_params = [
+            dict(params=head_params, lr=0.008),
+            dict(params=embed_params, lr=0.08),
+            dict(params=scalar_params, lr=0.04)
+        ]
+
+        # AdamW optimizer with parameter groups
+        optimizer1 = torch.optim.AdamW(adam_params, betas=(args.beta1, args.beta2), weight_decay=args.weight_decay, eps=1e-10, fused=True)
+
+        # Muon optimizer for hidden matrix parameters
+        optimizer2 = Muon(hidden_matrix_params, lr=args.lr, momentum=0.95)
+
+        # Combine both optimizers into a list
+        opt = [optimizer1, optimizer2]
+
     else:
-        opt = torch.optim.SGD(group_specs, lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+        opt = torch.optim.SGD(group_specs, lr=1e-4, momentum=0.9, weight_decay=args.weight_decay)
     
     if args.scheduler != 'none':
         if args.scheduler in ['cos', 'linear']:
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=opt, max_lr=args.lr, total_steps=args.iterations, 
-                                                            pct_start=args.warmup_percent, anneal_strategy=args.scheduler, 
-                                                            cycle_momentum=False, div_factor=1e2, final_div_factor=.1)
+            if args.opt == 'Muon':
+                adamw, muon = opt
+                scheduler1 = torch.optim.lr_scheduler.OneCycleLR(optimizer=adamw, max_lr=args.lr, total_steps=args.iterations, 
+                                                                pct_start=args.warmup_percent, anneal_strategy=args.scheduler, 
+                                                                cycle_momentum=False, div_factor=1e2, final_div_factor=.1)
+                scheduler2 = torch.optim.lr_scheduler.OneCycleLR(optimizer=muon, max_lr=0.05, total_steps=args.iterations, 
+                                                                pct_start=args.warmup_percent, anneal_strategy=args.scheduler, 
+                                                                cycle_momentum=False, div_factor=1e2, final_div_factor=.1)
+                scheduler = [scheduler1, scheduler2]
+            else:    
+                scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=opt, max_lr=args.lr, total_steps=args.iterations, 
+                                                                pct_start=args.warmup_percent, anneal_strategy=args.scheduler, 
+                                                                cycle_momentum=False, div_factor=1e2, final_div_factor=.1)
         else:
             raise NotImplementedError(f"Unknown scheduler type: {args.scheduler}.")
     else:
@@ -156,6 +215,24 @@ def main(args):
     distributed_backend.finalize()
 
 
+#if __name__ == "__main__":
+#   args = get_args()
+#    main(args)
+
 if __name__ == "__main__":
-    args = get_args()
-    main(args)
+    base_args = get_args()  
+    
+    
+    experiments = [ 
+        {"lr": 1e-2, "opt": "Muon", "batch_size": 128, "acc_steps": 10, "iterations": 2500, "eval_freq": 20},
+        {"lr": 3e-2, "opt": "Muon", "batch_size": 128, "acc_steps": 10, "iterations": 2500, "eval_freq": 20},
+        {"lr": 5e-2, "opt": "adamw", "batch_size": 128, "acc_steps": 10, "iterations": 2500, "eval_freq": 20},
+    ]
+
+
+    for exp in experiments:
+        args = copy.deepcopy(base_args)
+        for key, value in exp.items():
+            setattr(args, key, value)
+            args.exp_name = f"{args.model}_opt{args.opt}_lr{args.lr}_bs{args.batch_size}x{args.acc_steps}_seqlen{args.sequence_length}_seed={args.seed}"
+        main(args)  
